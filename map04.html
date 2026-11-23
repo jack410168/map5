@@ -1,0 +1,232 @@
+<!DOCTYPE html>
+<html lang="zh-HK">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>鐘位地圖</title>
+<style>
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+html,body{margin:0;height:100%;background:#14171a;color:#e8ecef;font-family:"Noto Sans TC","PingFang HK",system-ui,sans-serif}
+#main{position:fixed;inset:0;display:flex;flex-direction:column}
+#map{flex:1;min-height:0}
+.bar{display:flex;gap:8px;padding:8px 8px calc(8px + env(safe-area-inset-bottom));background:#14171a}
+.bar.sub{padding-bottom:0;display:none}
+button{flex:1;font:inherit;font-size:18px;font-weight:700;padding:14px 6px;border:0;border-radius:10px;background:#2a3036;color:#e8ecef}
+button:active{background:#3b444c}
+.go{background:#e0a31a;color:#1a1300}.ok{background:#2f9e5b;color:#fff}.bad{background:#b3382f;color:#fff}
+.full{position:fixed;inset:0;background:#14171a;display:none;flex-direction:column;z-index:5}
+.full.on{display:flex}
+#inp .body{flex:1;overflow:auto;padding:10px}
+.row{background:#1d2227;border-radius:10px;padding:10px;margin-bottom:10px}
+.row h4{margin:0 0 8px;font-size:15px;color:#e0a31a}
+input[type=text]{width:100%;font:inherit;font-size:16px;padding:10px;margin-bottom:6px;border:1px solid #3b444c;border-radius:8px;background:#101316;color:#e8ecef}
+.r2{display:flex;gap:6px;align-items:center}
+.r2 button{font-size:14px;padding:10px 8px;flex:none}
+.th{height:44px;border-radius:6px;display:none}
+.chips{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:10px}
+.chip{flex:none;padding:8px 12px;font-size:15px}
+#view .top{padding:calc(10px + env(safe-area-inset-top)) 12px 8px;font-size:17px;line-height:1.5}
+#vcoord{color:#9aa5ad;font-size:14px}
+#vnear{font-weight:700}
+#stage{position:relative;flex:1;min-height:0;background:#000;display:flex;align-items:center;justify-content:center}
+#vimg{max-width:100%;max-height:100%;object-fit:contain}
+#vdist{position:absolute;left:10px;top:10px;color:#3ddc84;font-weight:800;font-size:22px;text-shadow:0 0 4px #000,0 0 4px #000}
+#vlab{position:absolute;right:10px;top:10px;color:#fff;background:#000a;padding:4px 10px;border-radius:8px;font-weight:700}
+#vnone{position:absolute;color:#7b858d;font-size:18px}
+.arr{position:absolute;top:50%;transform:translateY(-50%);width:52px;height:80px;flex:none;background:#000a;font-size:34px;padding:0}
+#pv{left:0;border-radius:0 12px 12px 0}#nx{right:0;border-radius:12px 0 0 12px}
+#vidx{text-align:center;color:#9aa5ad;font-size:14px;padding:6px}
+#setk{position:fixed;inset:0;background:#000c;display:none;align-items:center;justify-content:center;z-index:9;padding:20px}
+#setk div{background:#1d2227;padding:16px;border-radius:12px;width:100%}
+</style>
+</head>
+<body>
+
+<div id="main">
+  <div id="map"></div>
+  <div class="bar sub" id="sub"><button id="bMapShow">地圖</button><button id="bImg">圖示</button></div>
+  <div class="bar"><button class="go" id="bStart">開始</button><button id="bMap">地圖鍵</button><button id="bInp">輸入</button></div>
+</div>
+
+<div class="full" id="inp">
+  <div class="body">
+    <div id="cnt" style="margin-bottom:8px;color:#9aa5ad"></div>
+    <div class="chips" id="chips"></div>
+    <div class="row"><h4>鐘位號碼</h4><input type="text" id="no" inputmode="numeric" placeholder="例如 10"></div>
+    <div id="rows"></div>
+  </div>
+  <div class="bar" style="flex-wrap:wrap">
+    <button id="bNext">下一組</button><button class="ok" id="bDone">完成</button><button class="bad" id="bDel">刪除</button>
+  </div>
+  <div class="bar" style="padding-top:0"><button id="bBack1">返回</button></div>
+</div>
+
+<div class="full" id="view">
+  <div class="top"><div id="vnear">定位中…</div><div id="vcoord"></div></div>
+  <div id="stage"><img id="vimg" alt=""><div id="vnone">未有圖片</div><div id="vdist"></div><div id="vlab"></div>
+    <button class="arr" id="pv">‹</button><button class="arr" id="nx">›</button></div>
+  <div id="vidx"></div>
+  <div class="bar"><button id="bBack2">返回</button></div>
+</div>
+
+<div id="setk"><div>
+  <p>請輸入 Google Maps API Key</p>
+  <input type="text" id="keyin" placeholder="AIza...">
+  <button class="go" id="keyok" style="width:100%">確定</button>
+</div></div>
+
+<script>
+const $=id=>document.getElementById(id);
+const LS='map02_data',KS='map02_key';
+let D=[];try{D=JSON.parse(localStorage.getItem(LS)||'[]')}catch(e){}
+const save=()=>{try{localStorage.setItem(LS,JSON.stringify(D))}catch(e){alert('儲存失敗（空間不足？）')}};
+let cur=null,map,gmk=[],curMk,circ,geocoder,watching=false;
+
+/* ---------- 工具 ---------- */
+const rad=x=>x*Math.PI/180;
+function dist(a,b){const R=6371000,dl=rad(b[0]-a[0]),dn=rad(b[1]-a[1]);
+  const h=Math.sin(dl/2)**2+Math.cos(rad(a[0]))*Math.cos(rad(b[0]))*Math.sin(dn/2)**2;
+  return 2*R*Math.asin(Math.sqrt(h))}
+const parseC=s=>{const m=(s||'').match(/-?\d+(\.\d+)?/g);return m&&m.length>=2?[+m[0],+m[1]]:null};
+const fmtC=c=>c[0].toFixed(6)+', '+c[1].toFixed(6);
+const stalls=()=>D.map(g=>({no:g.no,c:g.p.c,img:g.p.img,label:g.no+'号鐘位'}));
+const points=()=>{const a=[];D.forEach(g=>{a.push({no:g.no,c:g.p.c,img:g.p.img,label:g.no+'号鐘位'});
+  g.nodes.forEach((n,i)=>a.push({no:g.no,c:n.c,img:n.img,label:g.no+'号節點'+(n.name?'：'+n.name:String.fromCharCode(97+i))}))});return a};
+const sortNear=a=>cur?a.map(p=>({...p,d:dist(cur,p.c)})).sort((x,y)=>x.d-y.d):a.map(p=>({...p,d:NaN}));
+const m1=d=>isNaN(d)?'—':Math.round(d)+'米';
+
+/* ---------- Google Map ---------- */
+function loadMaps(){
+  let k=null;try{k=localStorage.getItem(KS)}catch(e){}
+  if(!k){$('setk').style.display='flex';return}
+  const s=document.createElement('script');
+  s.src='https://maps.googleapis.com/maps/api/js?key='+encodeURIComponent(k)+'&callback=initMap';
+  s.onerror=()=>alert('Google Map 載入失敗');document.head.appendChild(s);
+}
+$('keyok').onclick=()=>{const v=$('keyin').value.trim();if(!v)return;try{localStorage.setItem(KS,v)}catch(e){}location.reload()};
+window.gm_authFailure=()=>{try{localStorage.removeItem(KS)}catch(e){}alert('API Key 無效，請重新輸入');location.reload()};
+
+function initMap(){
+  map=new google.maps.Map($('map'),{center:{lat:22.2800,lng:114.1588},zoom:19,mapTypeId:'roadmap',disableDefaultUI:true,zoomControl:true,gestureHandling:'greedy'});
+  geocoder=new google.maps.Geocoder();
+  curMk=mk(null,'#ffd500','','#000');circ=new google.maps.Circle({map,radius:30,strokeColor:'#ffd500',strokeOpacity:.8,strokeWeight:1,fillColor:'#ffd500',fillOpacity:.08});
+  navigator.geolocation.watchPosition(onPos,e=>{$('vnear').textContent='無法取得定位：'+e.message},{enableHighAccuracy:true,maximumAge:1000,timeout:20000});
+}
+function mk(pos,color,text,tc){
+  return new google.maps.Marker({map,position:pos,label:text?{text,color:tc||'#fff',fontWeight:'700'}:null,
+    icon:{path:google.maps.SymbolPath.CIRCLE,scale:text?13:9,fillColor:color,fillOpacity:1,strokeColor:'#fff',strokeWeight:2}});
+}
+let first=true;
+function onPos(p){
+  cur=[p.coords.latitude,p.coords.longitude];
+  const ll={lat:cur[0],lng:cur[1]};
+  curMk.setPosition(ll);circ.setCenter(ll);
+  if(first){first=false;fit30()}
+  if($('view').classList.contains('on'))renderView();
+}
+function fit30(){if(cur&&map){map.setCenter({lat:cur[0],lng:cur[1]});map.fitBounds(circ.getBounds(),0)}}
+function clearMk(){gmk.forEach(m=>m.setMap(null));gmk=[]}
+
+/* ---------- 主畫面 ---------- */
+$('bMap').onclick=()=>{const s=$('sub');s.style.display=s.style.display==='flex'?'none':'flex'};
+$('bMapShow').onclick=()=>{
+  clearMk();const s=sortNear(stalls());
+  const b=new google.maps.LatLngBounds();
+  if(cur)b.extend({lat:cur[0],lng:cur[1]});
+  if(s[0]){gmk.push(mk({lat:s[0].c[0],lng:s[0].c[1]},'#e53935',s[0].no));b.extend({lat:s[0].c[0],lng:s[0].c[1]})}
+  if(s[1]){gmk.push(mk({lat:s[1].c[0],lng:s[1].c[1]},'#111',s[1].no));b.extend({lat:s[1].c[0],lng:s[1].c[1]})}
+  if(s.length||cur)map.fitBounds(b,60);
+  if(!s.length)alert('未有鐘位資料，請先按「輸入」');
+};
+$('bStart').onclick=()=>{openView('all')};
+$('bImg').onclick=()=>{openView('stall')};
+$('bInp').onclick=()=>{openInp()};
+
+/* ---------- 圖片檢視 (開始 / 圖示) ---------- */
+let vmode='all',vkey=null,vlist=[];
+function openView(m){vmode=m;vkey=null;$('view').classList.add('on');
+  $('vnear').textContent=cur?'':'定位中…';renderView(true)}
+function renderView(reset){
+  const all=sortNear(points()),st=sortNear(stalls());
+  vlist=vmode==='all'?all:st;
+  const near=all[0];
+  $('vcoord').textContent=cur?'現在坐標 '+fmtC(cur):'';
+  $('vnear').textContent=near&&cur?'離'+near.label+'有'+m1(near.d):(cur?'未有資料':'定位中…');
+  if(!vlist.length){$('vimg').style.display='none';$('vnone').style.display='block';$('vnone').textContent='未有鐘位資料';$('vdist').textContent='';$('vlab').textContent='';$('vidx').textContent='';return}
+  let i=reset?0:vlist.findIndex(p=>p.label===vkey&&p.no===vlist[0].no||p.label===vkey);
+  if(i<0)i=0;showAt(i);
+}
+function showAt(i){
+  const p=vlist[i];vkey=p.label;window._vi=i;
+  $('vlab').textContent=p.label;
+  $('vdist').textContent=cur?p.label.split('：')[0]+'在'+m1(p.d)+'外':'';
+  const im=$('vimg');
+  if(p.img){im.src=p.img;im.style.display='block';$('vnone').style.display='none'}
+  else{im.style.display='none';$('vnone').style.display='block';$('vnone').textContent='未有圖片'}
+  $('vidx').textContent=(i+1)+' / '+vlist.length;
+}
+$('pv').onclick=()=>{if(vlist.length)showAt((window._vi-1+vlist.length)%vlist.length)};
+$('nx').onclick=()=>{if(vlist.length)showAt((window._vi+1)%vlist.length)};
+$('bBack2').onclick=()=>$('view').classList.remove('on');
+
+/* ---------- 輸入 ---------- */
+const ROLES=['鐘位坐標','節點坐標 1','節點坐標 2','節點坐標 3'];
+let imgs=[null,null,null,null];
+function buildRows(g){
+  imgs=[g?g.p.img:null,...[0,1,2].map(i=>g&&g.nodes[i]?g.nodes[i].img:null)];
+  $('no').value=g?g.no:'';
+  $('rows').innerHTML=ROLES.map((r,i)=>`<div class="row"><h4>${r}</h4>
+    <input type="text" id="nm${i}" placeholder="地方名（可編輯）">
+    <input type="text" id="co${i}" inputmode="decimal" placeholder="緯度, 經度">
+    <div class="r2"><button onclick="here(${i})">現坐標</button>
+    <button onclick="document.getElementById('fi${i}').click()">圖片</button>
+    <img class="th" id="th${i}"><input type="file" id="fi${i}" accept="image/*" hidden onchange="pick(${i},this)"></div></div>`).join('');
+  const parts=g?[g.p,...g.nodes]:[];
+  parts.forEach((p,i)=>{$('nm'+i).value=p.name||'';$('co'+i).value=fmtC(p.c)});
+  imgs.forEach((s,i)=>thumb(i));
+}
+function thumb(i){const t=$('th'+i);if(imgs[i]){t.src=imgs[i];t.style.display='block'}else t.style.display='none'}
+function openInp(){buildRows(null);chips();$('inp').classList.add('on')}
+function chips(){
+  $('cnt').textContent='已儲存 '+D.length+' / 21 組';
+  $('chips').innerHTML=D.map((g,i)=>`<button class="chip" onclick="edit(${i})">${g.no}</button>`).join('');
+}
+window.edit=i=>buildRows(D[i]);
+window.here=i=>{
+  if(!cur){alert('未取得現在位置');return}
+  $('co'+i).value=fmtC(cur);
+  $('nm'+i).value='…';
+  geocoder.geocode({location:{lat:cur[0],lng:cur[1]}},(r,s)=>{
+    let n='';if(s==='OK'&&r[0]){const a=r[0].address_components.find(c=>c.types.includes('premise')||c.types.includes('point_of_interest')||c.types.includes('route'));n=a?a.long_name:r[0].formatted_address}
+    $('nm'+i).value=n;
+  });
+};
+window.pick=(i,el)=>{
+  const f=el.files[0];if(!f)return;
+  const fr=new FileReader();fr.onload=()=>{const im=new Image();im.onload=()=>{
+    const s=Math.min(1,640/Math.max(im.width,im.height)),c=document.createElement('canvas');
+    c.width=im.width*s;c.height=im.height*s;c.getContext('2d').drawImage(im,0,0,c.width,c.height);
+    imgs[i]=c.toDataURL('image/jpeg',.6);thumb(i)};im.src=fr.result};fr.readAsDataURL(f);
+};
+function readForm(silent){
+  const no=$('no').value.trim(),pc=parseC($('co0').value);
+  if(!no&&!pc&&!$('co1').value&&!$('co2').value&&!$('co3').value)return null;
+  if(!no||!pc){if(!silent)alert('請輸入鐘位號碼及鐘位坐標');return false}
+  const nodes=[];
+  for(let i=1;i<=3;i++){const c=parseC($('co'+i).value);if(c)nodes.push({name:$('nm'+i).value.trim(),c,img:imgs[i]})}
+  return{no,p:{name:$('nm0').value.trim(),c:pc,img:imgs[0]},nodes};
+}
+function commit(g){
+  const k=D.findIndex(x=>x.no===g.no);
+  if(k>=0)D[k]=g;else{if(D.length>=21){alert('最多 21 組');return false}D.push(g)}
+  save();return true;
+}
+$('bNext').onclick=()=>{const g=readForm();if(!g)return;if(commit(g)){buildRows(null);chips()}};
+$('bDone').onclick=()=>{const g=readForm();if(g===false)return;if(g&&!commit(g))return;save();$('inp').classList.remove('on')};
+$('bDel').onclick=()=>{if(confirm('清除全部已儲存資料？')){D=[];save();buildRows(null);chips()}};
+$('bBack1').onclick=()=>$('inp').classList.remove('on');
+
+loadMaps();
+</script>
+</body>
+</html>
